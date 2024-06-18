@@ -1,0 +1,48 @@
+UseTab: Never
+
+IndentWidth: 4
+AccessModifierOffset: 0
+
+BreakBeforeBraces: Attach 
+
+NamespaceIndentation: All
+
+ColumnLimit: 100
+
+AlignAfterOpenBracket: Align
+AlignOperands: Align 
+
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignConsecutiveMacros: true
+AlignEscapedNewlines: false
+
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 2
+
+IndentCaseBlocks: true
+
+AllowAllArgumentsOnNextLine: false 
+AllowAllParametersOfDeclarationOnNextLine: false
+
+AllowShortBlocksOnASingleLine: true
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true 
+
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLambdasOnASingleLine: Inline
+
+AlwaysBreakAfterReturnType: None
+AlwaysBreakTemplateDeclarations: Yes
+
+AlwaysBreakBeforeMultilineStrings: false 
+
+BitFieldColonSpacing: After
+
+InsertBraces: true
+
+IndentCaseLabels: true 
+

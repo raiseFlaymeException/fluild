@@ -1,0 +1,11 @@
+CompileFlags:
+  Add:
+    - "-std=c11"
+    - "-Isrc/include"
+    - "-Wall"
+    - "-Wextra"
+    - "-Werror"
+    - "-ferror-limit=50"
+
+Diagnostics:
+  UnusedIncludes: None
