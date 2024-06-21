@@ -43,12 +43,7 @@ int build_hellos() {
 int main(int argc, char *argv[]) {
     fluild_log_use_mutex();
 
-    FluildFTime ftime;
-    if (!FluildFTime_load(&ftime, FLUILD_DEFAULT_FILENAME_FTIME)) {
-        fluild_log(FLUILD_LOG_ERROR, "can't load ftime");
-        return 1;
-    }
-    if (!fluild_rebuild(&ftime, argc, argv)) {
+    if (!fluild_rebuild(argc, argv)) {
         fluild_log(FLUILD_LOG_ERROR, "can't rebuild this file");
         return 1;
     }
@@ -74,12 +69,6 @@ int main(int argc, char *argv[]) {
     } else {
         print_usage(argv[0]);
     }
-
-    if (!FluildFTime_save(&ftime, FLUILD_DEFAULT_FILENAME_FTIME)) {
-        fluild_log(FLUILD_LOG_ERROR, "can't save ftime");
-        return 1;
-    }
-    FluildFTime_unload(&ftime);
 
     fluild_log_destroy_mutex();
     return 0;

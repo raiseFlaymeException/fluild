@@ -8,13 +8,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
-
-#if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
-#else
-#error "OS other than windows is not supported yet"
-#endif
 
 //////////////////////////////////////
 //              SSTRING
@@ -100,6 +95,9 @@ size_t SStringAll_countc(const SStringAll *str, char chr, size_t offset) {
 //            END SSTRING
 //////////////////////////////////////
 
+//////////////////////////////////////
+//             LOGGING
+//////////////////////////////////////
 #define USE_PRINTF_FORMAT(format_pos, first_va_arg)                                                \
     __attribute__((format(printf, format_pos, first_va_arg)))
 
@@ -161,6 +159,13 @@ void fluild_log(FluildLogType log_type, const char *format, ...) {
     va_end(args);
 }
 
+//////////////////////////////////////
+//            END LOGGING
+//////////////////////////////////////
+
+//////////////////////////////////////
+//                CMD
+//////////////////////////////////////
 #define FLUILD_CMD_DEFAULT_CAP     16
 #define FLUILD_CMD_STR_DEFAULT_CAP 64
 
@@ -226,7 +231,13 @@ int FluildThreadCmd_get_result(FluildThreadCmd *thread) {
     pthread_join(thread->thread, NULL);
     return thread->ret;
 }
+//////////////////////////////////////
+//            END CMD
+//////////////////////////////////////
 
+//////////////////////////////////////
+//         REBUILD/FILE TIME
+//////////////////////////////////////
 #define FLUILD_NS100_TO_S_DIV 10000000ULL
 
 // (1901 - 1601) -> number of year between these two dates
@@ -238,190 +249,22 @@ int FluildThreadCmd_get_result(FluildThreadCmd *thread) {
 #define FLUILD_SECONDS_BETWEEN_1601_1970                                                           \
     ((unsigned long long)((1970 - 1601) * 365 + 89) * 24 * 60 * 60)
 
-// stolen from:
-// https://www.gamedev.net/forums/topic/565693-converting-filetime-to-time_t-on-windows/
-static time_t filetime_to_timet(const FILETIME *ft) {
-    ULARGE_INTEGER ull;
-    // put low part and hight part so quad part is the full 64 bit integer
-    ull.LowPart  = ft->dwLowDateTime;
-    ull.HighPart = ft->dwHighDateTime;
-    // divide by number of second in 100 ns
-    // then convert date from 01/01/1601 to 01/01/1970
-    return ull.QuadPart / FLUILD_NS100_TO_S_DIV - FLUILD_SECONDS_BETWEEN_1601_1970;
-}
-
 time_t fluild_get_file_time(const char *filename) {
-    HANDLE h =
-        CreateFileA(filename, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) { return -1; }
-
-    FILETIME last_write;
-    if (!GetFileTime(h, NULL, NULL, &last_write)) { return -1; }
-    if (!CloseHandle(h)) { return -1; }
-    return filetime_to_timet(&last_write);
-}
-
-typedef struct {
-    SStringView filename;
-    int         hour;
-    int         minute;
-    int         second;
-} FluildFTimeItem;
-
-typedef struct {
-    SString          full_file;
-    FluildFTimeItem *items;
-    size_t           size;
-} FluildFTime;
-
-#define FLUILD_FILE_TIME_DEFAULT_CAP  16
-#define FLUILD_DEFAULT_FILENAME_FTIME "fluild.ftime"
-
-bool FluildFTime_load(FluildFTime *ftime, const char *file_changed) {
-    // TODO: use a real format for the file
-    // current format:
-    // filename1:hour1:minute1:second1\n
-    // filename2:hour2:minute2:second2\n
-
-    // read entire file
-    SString_alloc(&ftime->full_file, FLUILD_FILE_TIME_DEFAULT_CAP);
-
-    FILE *f = fopen(file_changed, "r");
-    if (!f) { return false; }
-
-    if (!SString_getc_until(&ftime->full_file, f, EOF)) { return false; }
-
-    if (fclose(f) != 0) { return false; }
-
-    // allocate items
-    ftime->size  = SStringAll_countc((SStringAll *)&ftime->full_file, '\n', 0);
-    ftime->items = malloc(ftime->size * sizeof(*ftime->items));
-
-    // parse items
-    long long offset_new_line = 0;
-    for (size_t i = 0; i < ftime->size; ++i) {
-        FluildFTimeItem *cur_item = &ftime->items[i];
-
-        // find next_colon
-        long long next_colon =
-            SStringAll_findc((SStringAll *)&ftime->full_file, ':', offset_new_line);
-        if (next_colon < 0) { return false; }
-
-        // create filename:
-        // ...\nfilename:...
-        SStringView_init_substr((SStringAll *)&cur_item->filename, (SStringAll *)&ftime->full_file,
-                                offset_new_line, next_colon - offset_new_line);
-
-        // find next colon
-        long long old_colon = next_colon + 1;
-        next_colon = SStringAll_findc((SStringAll *)&ftime->full_file, ':', next_colon + 1);
-        if (next_colon < 0) { return false; }
-
-        // create hour
-        // ...:hour:...
-        SStringView buf;
-        SStringView_init_substr(&buf, (SStringAll *)&ftime->full_file, old_colon,
-                                next_colon - old_colon);
-        cur_item->hour = strtol(buf.data, NULL, 10);
-
-        // find next colon
-        old_colon  = next_colon + 1;
-        next_colon = SStringAll_findc((SStringAll *)&ftime->full_file, ':', next_colon + 1);
-        if (next_colon < 0) { return false; }
-
-        // create minute
-        // ...:minute:...
-        SStringView_init_substr(&buf, (SStringAll *)&ftime->full_file, old_colon,
-                                next_colon - old_colon);
-        cur_item->minute = strtol(buf.data, NULL, 10);
-
-        // find next new line
-        offset_new_line = SStringAll_findc((SStringAll *)&ftime->full_file, '\n', next_colon + 1);
-        if (offset_new_line < 0) { return false; }
-
-        // create second
-        // ...:second\n...
-        SStringView_init_substr(&buf, (SStringAll *)&ftime->full_file, next_colon + 1,
-                                offset_new_line);
-        cur_item->second = strtol(buf.data, NULL, 10);
-
-        // consume the new line
-        ++offset_new_line;
+    struct stat st;
+    if (stat(filename, &st) != 0) {
+        fluild_log(FLUILD_LOG_ERROR, "error querying file time of :%s", filename);
+        return 0;
     }
-
-    return true;
+    return st.st_mtime;
 }
-bool FluildFTime_save(const FluildFTime *ftime, const char *file_changed) {
-    FILE *f = fopen(file_changed, "w");
-    if (!f) { return false; }
 
-    for (size_t i = 0; i < ftime->size; ++i) {
-        FluildFTimeItem *cur_item = ftime->items + i;
-        if (fprintf(f, "%.*s:%02d:%02d:%02d\n", cur_item->filename.size, cur_item->filename.data,
-                    cur_item->hour, cur_item->minute, cur_item->second) == EOF) {
-            return false;
-        }
-    }
+bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
+    time_t this_file_time = fluild_get_file_time(this_file);
+    time_t fluild_h_time  = fluild_get_file_time(__FILE__);
+    time_t fluild_time    = fluild_get_file_time("fluild.exe");
 
-    return fclose(f) == 0;
-}
-void FluildFTime_unload(FluildFTime *ftime) {
-    // deinit the entire file so this will deinit all SStringView
-    SString_free(&ftime->full_file);
-
-    // free the items array
-    free(ftime->items);
-}
-bool FluildFTime_update(FluildFTime *ftime, const char *filename) {
-    time_t     timestamp = fluild_get_file_time(filename);
-    struct tm *time      = localtime(&timestamp);
-
-    size_t filename_size = strlen(filename);
-
-    // linear search for filename
-    // NOTE: fine for now because not many file
-    for (size_t i = 0; i < ftime->size; ++i) {
-        SStringView *cur_filename = &ftime->items[i].filename;
-        if (filename_size == cur_filename->size &&
-            memcmp(cur_filename->data, filename, filename_size) == 0) {
-            ftime->items[i].hour   = time->tm_hour;
-            ftime->items[i].minute = time->tm_min;
-            ftime->items[i].second = time->tm_sec;
-            return true;
-        }
-    }
-    // not found so create
-    ftime->items = realloc(ftime->items, ++ftime->size);
-    if (!ftime->items) { return false; }
-
-    ftime->items[ftime->size - 1].hour   = time->tm_hour;
-    ftime->items[ftime->size - 1].minute = time->tm_min;
-    ftime->items[ftime->size - 1].second = time->tm_sec;
-
-    ftime->items[ftime->size - 1].filename.data = filename;
-    ftime->items[ftime->size - 1].filename.size = filename_size;
-    return true;
-}
-bool FluildFTime_file_changed(const FluildFTime *ftime, const char *filename) {
-    time_t     timestamp = fluild_get_file_time(filename);
-    struct tm *time      = localtime(&timestamp);
-
-    size_t filename_size = strlen(filename);
-
-    // linear search for filename
-    // NOTE: fine for now because not many file
-    for (size_t i = 0; i < ftime->size; ++i) {
-        FluildFTimeItem *cur_item = &ftime->items[i];
-        if (filename_size == cur_item->filename.size &&
-            memcmp(cur_item->filename.data, filename, filename_size) == 0) {
-            return !(cur_item->hour == time->tm_hour && cur_item->minute == time->tm_min &&
-                     cur_item->second == time->tm_sec);
-        }
-    }
-    return true;
-}
-bool _fluild_rebuild(FluildFTime *ftime, const char *this_file, int argc, char **argv) {
-    if (FluildFTime_file_changed(ftime, this_file)) {
+    if (this_file_time > fluild_time || fluild_h_time > fluild_time) {
+        fluild_log(FLUILD_LOG_INFO, "rebuilding fluild.exe:");
         // remove old fluid if it exist than replace it by the new
         remove("fluild.old.exe");
         rename("fluild.exe", "fluild.old.exe");
@@ -431,11 +274,6 @@ bool _fluild_rebuild(FluildFTime *ftime, const char *this_file, int argc, char *
         SString cmd_rebuild = {0};
         fluild_cmd_append_many(&cmd_rebuild, "gcc", "-o", "fluild.exe", this_file);
         if (fluild_cmd_system(&cmd_rebuild) != 0) { return false; }
-
-        // update save and unload ftime so when we reload the file this won't rerun indefinitely
-        if (!FluildFTime_update(ftime, this_file)) { return false; }
-        if (!FluildFTime_save(ftime, FLUILD_DEFAULT_FILENAME_FTIME)) { return false; }
-        FluildFTime_unload(ftime);
 
         // rerun the build
         SString cmd_rerun = {0};
@@ -448,6 +286,10 @@ bool _fluild_rebuild(FluildFTime *ftime, const char *this_file, int argc, char *
     }
     return true;
 }
-#define fluild_rebuild(ftime, argc, argv) _fluild_rebuild(ftime, __FILE__, argc, argv)
+#define fluild_rebuild(argc, argv) _fluild_rebuild(__FILE__, argc, argv)
+
+//////////////////////////////////////
+//        END REBUILD/FILE TIME
+//////////////////////////////////////
 
 #endif // FLUILD_H
