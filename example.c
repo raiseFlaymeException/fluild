@@ -13,7 +13,7 @@ int build_hello_async(size_t n, FluildThreadCmd *thread_cmd) {
     char *hello_exe = asprintf("hellos\\hello%zu.exe", n);
     char *hello_c   = asprintf("hellos\\hello%zu.c", n);
 
-    thread_cmd->cmd = (SString){0};
+    // cmd must be zeroed
     fluild_cmd_append_many(&thread_cmd->cmd, "gcc", "-o", hello_exe, hello_c);
 
     free(hello_exe);
@@ -24,7 +24,7 @@ int build_hello_async(size_t n, FluildThreadCmd *thread_cmd) {
 }
 
 int build_hellos() {
-    FluildThreadCmd threads[20];
+    FluildThreadCmd threads[20] = {0};
     for (size_t i = 0; i < 20; ++i) {
         if (build_hello_async(i, threads + i) != 0) {
             fluild_log(FLUILD_LOG_ERROR, "error constructing cmd");
@@ -32,7 +32,7 @@ int build_hellos() {
         }
     }
     for (size_t i = 0; i < 20; ++i) {
-        if (FluildThreadCmd_get_result(threads + i) != 0) {
+        if (FluildThreadCmd_get_result(threads + i, NULL) != 0) {
             fluild_log(FLUILD_LOG_ERROR, "compilation of hello%d.c return non zero exit code", i);
             return 1;
         }
@@ -60,7 +60,7 @@ int main(int argc, char *argv[]) {
             char   *hello_exe = asprintf("hellos\\hello%zu.exe", i);
             SString cmd       = {0};
             fluild_cmd_append_many(&cmd, "del", hello_exe);
-            if (fluild_cmd_system(&cmd) != 0) {
+            if (fluild_cmd_exec(&cmd, NULL) != 0) {
                 fluild_log(FLUILD_LOG_ERROR, "deleting %s failed", hello_exe);
                 return 1;
             }

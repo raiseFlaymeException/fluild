@@ -166,8 +166,16 @@ void fluild_log(FluildLogType log_type, const char *format, ...) {
 //////////////////////////////////////
 //                CMD
 //////////////////////////////////////
+
 #define FLUILD_CMD_DEFAULT_CAP     16
 #define FLUILD_CMD_STR_DEFAULT_CAP 64
+
+typedef struct {
+    pthread_t thread;
+    SString   cmd;
+    SString   res;
+    int       ret;
+} FluildThreadCmd;
 
 void fluild_cmd_append(SString *cmd, const char *cstr) {
     if (!cmd->cap) { SString_alloc(cmd, FLUILD_CMD_STR_DEFAULT_CAP); }
@@ -191,17 +199,7 @@ void fluild_cmd_append_many(SString *cmd, ...) {
 }
 #define fluild_cmd_append_many(...) fluild_cmd_append_many(__VA_ARGS__, NULL)
 
-int fluild_cmd_system(SString *cmd) {
-    SString_append(cmd, '\0');
-
-    fluild_log(FLUILD_LOG_INFO, "CMD %s", cmd->data);
-    int result = system(cmd->data);
-
-    SString_free(cmd);
-    return result;
-}
-
-int FluildCmd_exec(SString *cmd, SString *result) {
+int fluild_cmd_exec(SString *cmd, SString *result) {
     SString_append(cmd, '\0');
 
     fluild_log(FLUILD_LOG_INFO, "CMD %s", cmd->data);
@@ -209,26 +207,23 @@ int FluildCmd_exec(SString *cmd, SString *result) {
     FILE *proc = popen(cmd->data, "r");
     SString_free(cmd);
 
-    if (!SString_getc_until(result, proc, EOF)) { return false; }
+    if (result) {
+        if (!SString_getc_until(result, proc, EOF)) { return false; }
+    }
     return pclose(proc);
 }
 
-typedef struct {
-    pthread_t thread;
-    SString   cmd;
-    int       ret;
-} FluildThreadCmd;
-
-static void *fluild_thread_cmd_system(void *_cmd) {
+static void *fluild_thread_cmd_exec(void *_cmd) {
     FluildThreadCmd *cmd = _cmd;
-    cmd->ret             = fluild_cmd_system(&cmd->cmd);
+    cmd->ret             = fluild_cmd_exec(&cmd->cmd, &cmd->res);
     return NULL;
 }
 void fluild_cmd_system_async(FluildThreadCmd *thread_handle) {
-    pthread_create(&thread_handle->thread, NULL, fluild_thread_cmd_system, thread_handle);
+    pthread_create(&thread_handle->thread, NULL, fluild_thread_cmd_exec, thread_handle);
 }
-int FluildThreadCmd_get_result(FluildThreadCmd *thread) {
+int FluildThreadCmd_get_result(FluildThreadCmd *thread, SString *result) {
     pthread_join(thread->thread, NULL);
+    if (result) { *result = thread->res; }
     return thread->ret;
 }
 //////////////////////////////////////
@@ -252,38 +247,54 @@ int FluildThreadCmd_get_result(FluildThreadCmd *thread) {
 time_t fluild_get_file_time(const char *filename) {
     struct stat st;
     if (stat(filename, &st) != 0) {
-        fluild_log(FLUILD_LOG_ERROR, "error querying file time of :%s", filename);
+        fluild_log(FLUILD_LOG_ERROR, "error querying file time of %s", filename);
         return 0;
     }
     return st.st_mtime;
 }
 
 bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
+    const char *program     = argv[0];
+    char       *program_old = asprintf("%s.old", program);
+    if (!program_old) { return false; }
     time_t this_file_time = fluild_get_file_time(this_file);
     time_t fluild_h_time  = fluild_get_file_time(__FILE__);
-    time_t fluild_time    = fluild_get_file_time("fluild.exe");
+    time_t fluild_time    = fluild_get_file_time(program);
 
     if (this_file_time > fluild_time || fluild_h_time > fluild_time) {
-        fluild_log(FLUILD_LOG_INFO, "rebuilding fluild.exe:");
-        // remove old fluid if it exist than replace it by the new
-        remove("fluild.old.exe");
-        rename("fluild.exe", "fluild.old.exe");
-        fluild_log(FLUILD_LOG_INFO, "renaming fluild.exe to fluild.old.exe");
+        fluild_log(FLUILD_LOG_INFO, "rebuilding %s", program);
+
+        // rename the file and remove it for next time being run
+        rename(program, program_old);
 
         // rebuild the file
         SString cmd_rebuild = {0};
-        fluild_cmd_append_many(&cmd_rebuild, "gcc", "-o", "fluild.exe", this_file);
-        if (fluild_cmd_system(&cmd_rebuild) != 0) { return false; }
+        fluild_cmd_append_many(&cmd_rebuild, "gcc", "-o", program, this_file);
+        if (fluild_cmd_exec(&cmd_rebuild, NULL) != 0) {
+            // an error appened so we need to get the old one
+            rename(program_old, program);
+            free(program_old);
+            return false;
+        }
 
         // rerun the build
         SString cmd_rerun = {0};
-        fluild_cmd_append(&cmd_rerun, "fluild.exe");
         // append all args of argv
-        for (int i = 0; i < argc - 1; ++i) { fluild_cmd_append(&cmd_rerun, argv[i + 1]); }
+        for (int i = 0; i < argc; ++i) { fluild_cmd_append(&cmd_rerun, argv[i]); }
 
         fluild_log(FLUILD_LOG_INFO, "reruning itself");
-        exit(fluild_cmd_system(&cmd_rerun));
+
+        SString out;
+        SString_alloc(&out, FLUILD_CMD_DEFAULT_CAP);
+        int ret = fluild_cmd_exec(&cmd_rerun, &out);
+        fluild_log(FLUILD_LOG_INFO, "output:\n%.*s", out.size, out.data);
+
+        SString_free(&out);
+
+        exit(ret);
     }
+    if (access(program_old, F_OK) == 0) { remove(program_old); }
+    free(program_old);
     return true;
 }
 #define fluild_rebuild(argc, argv) _fluild_rebuild(__FILE__, argc, argv)
