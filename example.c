@@ -48,14 +48,18 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (argc < 2) {
-        print_usage(argv[0]);
-    } else if (strcmp(argv[1], "build") == 0) {
+    char *prog = shift_args(&argc, &argv);
+    assert(prog && "somehow argv[0] doesn't contain the program name");
+    char *command = shift_args(&argc, &argv);
+
+    if (!command) {
+        print_usage(prog);
+    } else if (streq(command, "build")) {
         if (build_hellos() != 0) {
             fluild_log(FLUILD_LOG_ERROR, "compilation of hellos return non zero exit code");
             return 1;
         }
-    } else if (strcmp(argv[1], "clean") == 0) {
+    } else if (streq(command, "clean")) {
         for (size_t i = 0; i < 20; ++i) {
             char   *hello_exe = asprintf("hellos\\hello%zu.exe", i);
             SString cmd       = {0};
@@ -67,7 +71,7 @@ int main(int argc, char *argv[]) {
             free(hello_exe);
         }
     } else {
-        print_usage(argv[0]);
+        print_usage(prog);
     }
 
     fluild_log_destroy_mutex();
