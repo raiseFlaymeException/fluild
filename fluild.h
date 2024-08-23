@@ -12,9 +12,9 @@
 #include <time.h>
 
 //////////////////////////////////////
-//              SSTRING
+//             SSTRING
 //////////////////////////////////////
-// this is a copy of sstring in my library called easy_c_data_structure
+// this is a copy of sstring.h in my library called easy_c_data_structure
 typedef struct {
     const char *data;
     size_t      size;
@@ -33,13 +33,44 @@ void SString_alloc(SString *str, size_t cap) {
     str->cap  = cap;
     str->size = 0;
 }
+void SString_dup_cstr(SString *str, const char *cstr) {
+    str->data = strdup(cstr);
+    str->cap  = strlen(cstr);
+    str->size = 0;
+}
 void SString_free(SString *str) { free(str->data); }
-void SString_append(SString *str, char data) {
-    if (str->size + 1 >= str->cap) {
-        str->cap *= 2;
-        str->data = realloc(str->data, str->cap);
+void SString_extend(SString *str, size_t size) {
+    if (size > str->cap) {
+        str->data = realloc(str->data, size);
+        str->cap  = size;
     }
+}
+void SString_append(SString *str, char data) {
+    if (str->size + 1 >= str->cap) { SString_extend(str, str->cap << 1); }
     str->data[str->size++] = data;
+}
+bool SString_getc_until(SString *str, FILE *file, int char_or_eof) {
+    int cur_char; // can be EOF so int (because sizeof(EOF)==sizeof(int)>sizeof(char))
+    while (true) {
+        cur_char = getc(file);
+        if (cur_char == char_or_eof) { return true; }
+        if (cur_char == EOF) { return false; }
+        SString_append(str, cur_char);
+    }
+}
+
+void SString_vprintf(SString *str, const char *format, va_list args) {
+    size_t size = vsnprintf(NULL, 0, format, args);
+    if (size > str->cap) { SString_extend(str, size); }
+    vsprintf(str->data, format, args);
+}
+void SString_printf(SString *str, const char *format, ...) {
+    va_list args;
+    va_start(args, format);
+
+    SString_vprintf(str, format, args);
+
+    va_end(args);
 }
 
 void SStringView_init_cstr(SStringView *view, const char *cstr) {
@@ -55,18 +86,13 @@ void SStringView_init_substr(SStringView *view, const SStringAll *str, size_t of
     view->size = size;
 }
 
-bool SString_getc_until(SString *str, FILE *file, int char_or_eof) {
-    int cur_char; // can be EOF so int (because sizeof(EOF)>sizeof(char))
-    while (true) {
-        cur_char = getc(file);
-        if (cur_char == char_or_eof) { return true; }
-        if (cur_char == EOF) { return false; }
-        SString_append(str, cur_char);
-    }
-}
-
 void SString_append_str(SString *str, const SStringAll *to_append) {
     for (size_t i = 0; i < to_append->size; i++) { SString_append(str, to_append->data[i]); }
+}
+void SString_append_cstr(SString *str, const char *cstr) {
+    SStringView view;
+    SStringView_init_cstr(&view, cstr);
+    SString_append_str(str, &view);
 }
 
 void SString_join(SString *res, const SStringAll *strs, size_t size) {
@@ -161,6 +187,18 @@ void fluild_log(FluildLogType log_type, const char *format, ...) {
 
 //////////////////////////////////////
 //            END LOGGING
+//////////////////////////////////////
+
+//////////////////////////////////////
+//               ARGS
+//////////////////////////////////////
+
+char *shift_args(int *argc, char ***argv) { return ((*argc)--) ? *(*argv)++ : NULL; }
+
+#define streq(a, b) (strcmp(a, b) == 0)
+
+//////////////////////////////////////
+//             END ARGS
 //////////////////////////////////////
 
 //////////////////////////////////////
@@ -265,6 +303,7 @@ bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
         fluild_log(FLUILD_LOG_INFO, "rebuilding %s", program);
 
         // rename the file and remove it for next time being run
+        if (access(program_old, F_OK) == 0) { remove(program_old); }
         rename(program, program_old);
 
         // rebuild the file
@@ -272,6 +311,10 @@ bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
         fluild_cmd_append_many(&cmd_rebuild, "gcc", "-o", program, this_file);
         if (fluild_cmd_exec(&cmd_rebuild, NULL) != 0) {
             // an error appened so we need to get the old one
+            fluild_log(FLUILD_LOG_INFO,
+                       "rebuild failed, reusing the old build for future build...");
+
+            fluild_log(FLUILD_LOG_ERROR, "%s -> %s", program_old, program);
             rename(program_old, program);
             free(program_old);
             return false;
