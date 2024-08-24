@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <time.h>
 
+#define CC "gcc"
+
 //////////////////////////////////////
 //             SSTRING
 //////////////////////////////////////
@@ -229,13 +231,13 @@ void fluild_cmd_vappend_many(SString *cmd, va_list args) {
     while ((to_append = va_arg(args, const char *))) { fluild_cmd_append(cmd, to_append); }
 }
 
-void fluild_cmd_append_many(SString *cmd, ...) {
+void _fluild_cmd_append_many(SString *cmd, ...) {
     va_list args;
     va_start(args, cmd);
     fluild_cmd_vappend_many(cmd, args);
     va_end(args);
 }
-#define fluild_cmd_append_many(...) fluild_cmd_append_many(__VA_ARGS__, NULL)
+#define fluild_cmd_append_many(cmd, ...) _fluild_cmd_append_many(cmd, __VA_ARGS__, NULL)
 
 int fluild_cmd_exec(SString *cmd, SString *result) {
     SString_append(cmd, '\0');
@@ -290,11 +292,10 @@ time_t fluild_get_file_time(const char *filename) {
     }
     return st.st_mtime;
 }
-
 bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
-    const char *program     = argv[0];
-    char       *program_old = asprintf("%s.old", program);
-    if (!program_old) { return false; }
+    char *program = *argv;
+    assert(program && "somehow argv doen't contain the program name");
+
     time_t this_file_time = fluild_get_file_time(this_file);
     time_t fluild_h_time  = fluild_get_file_time(__FILE__);
     time_t fluild_time    = fluild_get_file_time(program);
@@ -302,42 +303,45 @@ bool _fluild_rebuild(const char *this_file, int argc, char **argv) {
     if (this_file_time > fluild_time || fluild_h_time > fluild_time) {
         fluild_log(FLUILD_LOG_INFO, "rebuilding %s", program);
 
-        // rename the file and remove it for next time being run
-        if (access(program_old, F_OK) == 0) { remove(program_old); }
-        rename(program, program_old);
+        char *program_old = asprintf("%s.old", program);
 
-        // rebuild the file
-        SString cmd_rebuild = {0};
-        fluild_cmd_append_many(&cmd_rebuild, "gcc", "-o", program, this_file);
-        if (fluild_cmd_exec(&cmd_rebuild, NULL) != 0) {
-            // an error appened so we need to get the old one
-            fluild_log(FLUILD_LOG_INFO,
-                       "rebuild failed, reusing the old build for future build...");
-
-            fluild_log(FLUILD_LOG_ERROR, "%s -> %s", program_old, program);
-            rename(program_old, program);
-            free(program_old);
+        if (access(program_old, F_OK) == 0 && remove(program_old)) {
+            fluild_log(FLUILD_LOG_ERROR, "failed to remove %s , error: %s", program_old,
+                       strerror(errno));
+            return false;
+        }
+        if (rename(program, program_old)) {
+            fluild_log(FLUILD_LOG_ERROR, "failed to rename %s to %s, error: %s", program,
+                       program_old, strerror(errno));
             return false;
         }
 
-        // rerun the build
-        SString cmd_rerun = {0};
-        // append all args of argv
-        for (int i = 0; i < argc; ++i) { fluild_cmd_append(&cmd_rerun, argv[i]); }
+        SString cmd = {0};
+        fluild_cmd_append_many(&cmd, CC, "-o", program, this_file);
 
-        fluild_log(FLUILD_LOG_INFO, "reruning itself");
+        if (fluild_cmd_exec(&cmd, NULL)) {
+            fluild_log(FLUILD_LOG_ERROR, "failed to compile %s", program);
+            if (rename(program_old, program)) {
+                fluild_log(FLUILD_LOG_ERROR, "failed to rename %s to %s, error: %s", program_old,
+                           program, strerror(errno));
+                return false;
+            }
 
-        SString out;
-        SString_alloc(&out, FLUILD_CMD_DEFAULT_CAP);
-        int ret = fluild_cmd_exec(&cmd_rerun, &out);
-        fluild_log(FLUILD_LOG_INFO, "output:\n%.*s", out.size, out.data);
+            free(program_old);
+            return false;
+        }
+        free(program_old);
 
-        SString_free(&out);
+        fluild_log(FLUILD_LOG_INFO, "reuruning %s", program);
 
-        exit(ret);
+        char **args = malloc((argc + 1) * sizeof(*args));
+        for (int i = 0; i < argc; ++i) { args[i] = argv[i]; }
+        args[argc] = NULL;
+
+        spawnv(P_WAIT, program, args);
+        free(args);
+        exit(0);
     }
-    if (access(program_old, F_OK) == 0) { remove(program_old); }
-    free(program_old);
     return true;
 }
 #define fluild_rebuild(argc, argv) _fluild_rebuild(__FILE__, argc, argv)
